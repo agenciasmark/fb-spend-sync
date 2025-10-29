@@ -1,13 +1,36 @@
-import 'dotenv/config';
+// --- ENV CHECK (para debug no Railway) ---
+console.log('ENV CHECK', {
+  SUPABASE_URL: !!process.env.SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+  FB_TOKEN: !!process.env.FB_TOKEN,
+  FB_API_VERSION: process.env.FB_API_VERSION,
+  ACCOUNT_IDS: process.env.ACCOUNT_IDS
+});
+
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 
+// Captura as variáveis do ambiente
 const {
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
   FB_TOKEN,
   FB_API_VERSION = 'v19.0',
   ACCOUNT_IDS
+} = process.env;
+
+// Mensagens de erro mais claras
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY)
+  throw new Error('Faltam SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY');
+if (!FB_TOKEN)
+  throw new Error('Falta FB_TOKEN');
+if (!ACCOUNT_IDS)
+  throw new Error('Falta ACCOUNT_IDS');
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+const accounts = ACCOUNT_IDS.split(',').map(s => s.trim()).filter(Boolean);
+
+const today = () => new Date().toISOString().slice(0, 10);
 } = process.env;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
