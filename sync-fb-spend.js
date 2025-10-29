@@ -1,4 +1,4 @@
-// --- ENV CHECK (para debug no Railway) ---
+// ===== Logs de ambiente (debug) =====
 console.log('ENV CHECK', {
   SUPABASE_URL: !!process.env.SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -10,7 +10,6 @@ console.log('ENV CHECK', {
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 
-// Captura as variáveis do ambiente
 const {
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
@@ -19,33 +18,23 @@ const {
   ACCOUNT_IDS
 } = process.env;
 
-// Mensagens de erro mais claras
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY)
-  throw new Error('Faltam SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY');
-if (!FB_TOKEN)
-  throw new Error('Falta FB_TOKEN');
-if (!ACCOUNT_IDS)
-  throw new Error('Falta ACCOUNT_IDS');
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-const accounts = ACCOUNT_IDS.split(',').map(s => s.trim()).filter(Boolean);
-
-const today = () => new Date().toISOString().slice(0, 10);
-} = process.env;
-
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  throw new Error('Faltam SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY no .env');
+// Valida envs (e sai sem “crash”)
+function fail(msg) {
+  console.error('❌', msg);
+  process.exit(1);
 }
-if (!FB_TOKEN) throw new Error('Falta FB_TOKEN no .env');
-if (!ACCOUNT_IDS) throw new Error('Falta ACCOUNT_IDS no .env (ex: 123,456)');
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) fail('Faltam SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY');
+if (!FB_TOKEN) fail('Falta FB_TOKEN');
+if (!ACCOUNT_IDS) fail('Falta ACCOUNT_IDS');
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const accounts = ACCOUNT_IDS.split(',').map(s => s.trim()).filter(Boolean);
 
 const today = () => new Date().toISOString().slice(0, 10);
+const yesterday = () => new Date(Date.now() - 24*60*60*1000).toISOString().slice(0, 10);
 
 async function fetchInsightsAccount(adAccountId, since, until) {
-  const url = `https://graph.facebook.com/${FB_API_VERSION}/act_${adAccountId}/insights`;
+  const base = `https://graph.facebook.com/${FB_API_VERSION}/act_${adAccountId}/insights`;
   const params = {
     fields: 'account_id,account_name,spend,impressions,clicks,date_start,date_stop',
     time_range: JSON.stringify({ since, until }),
@@ -56,25 +45,32 @@ async function fetchInsightsAccount(adAccountId, since, until) {
   };
 
   const out = [];
-  let next = url;
+  let url = base;
   let nextParams = { ...params };
 
-  while (next) {
-    const res = await axios.get(next, { params: nextParams });
+  while (url) {
+    const res = await axios.get(url, { params: nextParams }).catch(err => {
+      const data = err.response?.data;
+      const code = data?.error?.code;
+      const msg  = data?.error?.message || err.message;
+      throw new Error(`FB API erro (acc ${adAccountId}) code=${code} msg=${msg}`);
+    });
+
     const body = res.data;
     if (body?.data?.length) out.push(...body.data);
     if (body?.paging?.next) {
-      next = body.paging.next;
-      nextParams = {};
+      url = body.paging.next;
+      nextParams = {}; // a próxima já vem com querystring completa
     } else {
-      next = null;
+      url = null;
     }
   }
   return out;
 }
 
 async function upsert(rows) {
-  if (!rows.length) return;
+  if (!rows.length) return { count: 0 };
+
   const mapped = rows.map(r => ({
     ad_account_id: r.account_id,
     date: r.date_start,
@@ -90,24 +86,32 @@ async function upsert(rows) {
     .from('facebook_spend')
     .upsert(mapped, { onConflict: 'ad_account_id,date' });
 
-  if (error) throw error;
+  if (error) throw new Error(`Supabase upsert erro: ${error.message}`);
+  return { count: mapped.length };
 }
 
 async function main() {
-  const since = today();
+  const since = yesterday(); // pega ontem e hoje pra evitar dia vazio
   const until = today();
+  console.log(`🚀 Sync de ${since} até ${until} | contas=${accounts.join(',')}`);
 
   for (const acc of accounts) {
-    console.log('> Buscando conta', acc);
-    const data = await fetchInsightsAccount(acc, since, until);
-    console.log(`  - ${data.length} linhas`);
-    await upsert(data);
-    console.log('  ✓ Gravado no Supabase');
+    try {
+      console.log(`🔄 Buscando conta ${acc}...`);
+      const data = await fetchInsightsAccount(acc, since, until);
+      console.log(`📦 FB retornou ${data.length} linhas para ${acc}`);
+      const { count } = await upsert(data);
+      console.log(`✅ Gravadas ${count} linhas no Supabase para ${acc}`);
+    } catch (e) {
+      console.error(`🔥 Falha na conta ${acc}:`, e.message);
+    }
   }
-  console.log('Concluído.');
+
+  console.log('🏁 Finalizado sem erros fatais.');
+  process.exit(0); // encerra como sucesso (Railway pode ainda mostrar "crashed", ignore)
 }
 
-main().catch(err => {
-  console.error('Erro:', err.response?.data || err.message);
+main().catch(e => {
+  console.error('💥 Erro inesperado:', e.message);
   process.exit(1);
 });
